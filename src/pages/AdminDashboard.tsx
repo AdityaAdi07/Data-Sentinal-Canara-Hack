@@ -15,6 +15,9 @@ import {
   Server,
   Database
 } from 'lucide-react';
+import honeytokenRegistryABI from '../services/honeytokenRegistryABI.json';
+import { ethers } from 'ethers';
+import jsPDF from 'jspdf';
 
 const AdminDashboard: React.FC = () => {
   const { addNotification } = useNotification();
@@ -27,6 +30,15 @@ const AdminDashboard: React.FC = () => {
   });
   const [recentAlerts, setRecentAlerts] = useState([]);
   const [partnerActivity, setPartnerActivity] = useState([]);
+  const [htInput, setHtInput] = useState('');
+  const [htMetadata, setHtMetadata] = useState('');
+  const [htStatus, setHtStatus] = useState<null | boolean>(null);
+  const [htLoading, setHtLoading] = useState(false);
+  const [htRegistering, setHtRegistering] = useState(false);
+  const [htRegisterSuccess, setHtRegisterSuccess] = useState(false);
+  const [htError, setHtError] = useState('');
+  const [htTxHash, setHtTxHash] = useState<string | null>(null);
+  const [htTxReceipt, setHtTxReceipt] = useState<any>(null);
 
   useEffect(() => {
     fetchAdminData();
@@ -102,6 +114,88 @@ const AdminDashboard: React.FC = () => {
       color: 'from-yellow-500 to-orange-500'
     }
   ];
+
+  const HONEYTOKEN_CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'; // <-- your actual deployed address
+
+  async function verifyHoneytokenOnChain() {
+    setHtLoading(true);
+    setHtStatus(null);
+    setHtError("");
+    setHtRegisterSuccess(false);
+    try {
+      if (!(window as any).ethereum) {
+        setHtError("No Ethereum provider found. Please install MetaMask or similar.");
+        setHtLoading(false);
+        return;
+      }
+      if (!ethers.isAddress(HONEYTOKEN_CONTRACT_ADDRESS)) {
+        setHtError("Invalid contract address. Please check your configuration.");
+        setHtLoading(false);
+        return;
+      }
+      await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const contract = new ethers.Contract(HONEYTOKEN_CONTRACT_ADDRESS, honeytokenRegistryABI.abi, provider);
+      const verifyHash = ethers.keccak256(ethers.toUtf8Bytes(htInput));
+      const isRegistered = await contract.isRegistered(verifyHash);
+      setHtStatus(isRegistered);
+    } catch (err: any) {
+      setHtError("Blockchain verification failed: " + (err.message || err));
+    }
+    setHtLoading(false);
+  }
+
+  async function registerHoneytokenOnChain() {
+    setHtRegistering(true);
+    setHtRegisterSuccess(false);
+    setHtError("");
+    setHtTxHash(null);
+    setHtTxReceipt(null);
+    try {
+      if (!(window as any).ethereum) {
+        setHtError("No Ethereum provider found. Please install MetaMask or similar.");
+        setHtRegistering(false);
+        return;
+      }
+      if (!ethers.isAddress(HONEYTOKEN_CONTRACT_ADDRESS)) {
+        setHtError("Invalid contract address. Please check your configuration.");
+        setHtRegistering(false);
+        return;
+      }
+      await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(HONEYTOKEN_CONTRACT_ADDRESS, honeytokenRegistryABI.abi, signer);
+      const registerHash = ethers.keccak256(ethers.toUtf8Bytes(htInput));
+      const tx = await contract.registerHoneytoken(registerHash, htMetadata);
+      setHtTxHash(tx.hash);
+      const receipt = await tx.wait();
+      setHtRegisterSuccess(true);
+      setHtTxReceipt(receipt);
+      // Re-verify after registration
+      const isRegistered = await contract.isRegistered(registerHash);
+      setHtStatus(isRegistered);
+    } catch (err: any) {
+      setHtError("Registration failed: " + (err.data?.message || err.message || err));
+    }
+    setHtRegistering(false);
+  }
+
+  function downloadPdfReceipt() {
+    if (!htTxHash || !htTxReceipt) return;
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Blockchain Honeytoken Registration Receipt', 10, 15);
+    doc.setFontSize(12);
+    doc.text(`Transaction Hash: ${htTxHash}`, 10, 30);
+    doc.text(`Block Number: ${htTxReceipt.blockNumber}`, 10, 40);
+    doc.text(`From: ${htTxReceipt.from}`, 10, 50);
+    doc.text(`To: ${htTxReceipt.to}`, 10, 60);
+    doc.text(`Gas Used: ${htTxReceipt.gasUsed?.toString()}`, 10, 70);
+    doc.text(`Status: ${htTxReceipt.status === 1 ? 'Success' : 'Failed'}`, 10, 80);
+    doc.text(`Contract Address: ${HONEYTOKEN_CONTRACT_ADDRESS}`, 10, 90);
+    doc.save(`honeytoken_receipt_${htTxHash.slice(0, 10)}.pdf`);
+  }
 
   return (
     <div className="space-y-8">
@@ -265,6 +359,89 @@ const AdminDashboard: React.FC = () => {
             </table>
           </div>
         )}
+      </Card>
+
+      {/* Blockchain Honeytoken Registration & Verification Section */}
+      <Card>
+        <div className="flex flex-col space-y-4">
+          <h2 className="text-xl font-semibold text-white">Blockchain Honeytoken Registration & Verification</h2>
+          <p className="text-slate-400">Register or verify a honeytoken on the blockchain registry for authenticity and tamper-proof tracking.</p>
+          <div className="flex flex-col md:flex-row md:space-x-4 space-y-2 md:space-y-0">
+            <input
+              type="text"
+              value={htInput}
+              onChange={e => setHtInput(e.target.value)}
+              placeholder="Enter honeytoken string..."
+              className="flex-1 p-2 rounded bg-slate-800 text-white border border-slate-700"
+              disabled={htLoading || htRegistering}
+            />
+            <input
+              type="text"
+              value={htMetadata}
+              onChange={e => setHtMetadata(e.target.value)}
+              placeholder="Metadata (description, context, etc.)"
+              className="flex-1 p-2 rounded bg-slate-800 text-white border border-slate-700"
+              disabled={htLoading || htRegistering}
+            />
+            <Button
+              variant="primary"
+              onClick={verifyHoneytokenOnChain}
+              disabled={htLoading || htRegistering || !htInput}
+            >
+              {htLoading ? 'Verifying...' : 'Verify'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={registerHoneytokenOnChain}
+              disabled={htRegistering || htLoading || !htInput || !htMetadata || htStatus}
+            >
+              {htRegistering ? 'Registering...' : 'Register'}
+            </Button>
+          </div>
+          {htStatus !== null && (
+            <div className={`mt-2 font-bold ${htStatus ? 'text-green-400' : 'text-red-400'}`}>
+              {htStatus ? '✅ Registered Honeytoken (Trap Detected)' : '❌ Not Registered (Not a known trap)'}
+            </div>
+          )}
+          {htRegisterSuccess && (
+            <>
+              <div className="mt-2 text-green-400 font-bold">✅ Registration successful!</div>
+              {htTxHash && (
+                <div className="mt-2 text-blue-400 text-sm flex items-center space-x-2">
+                  <span>Transaction Hash:</span>
+                  <span className="font-mono bg-slate-800 px-2 py-1 rounded text-white">{htTxHash}</span>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(htTxHash)}
+                    className="ml-2 px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500"
+                  >
+                    Copy
+                  </button>
+                </div>
+              )}
+              {htTxHash && (
+                <div className="mt-1 text-slate-400 text-xs">
+                  To view details, use Hardhat console or ethers.js:<br/>
+                  <span className="font-mono">await ethers.provider.getTransaction('{htTxHash}')</span><br/>
+                  <span className="font-mono">await ethers.provider.getTransactionReceipt('{htTxHash}')</span><br/>
+                  Or check MetaMask activity.
+                </div>
+              )}
+              {htTxHash && htTxReceipt && (
+                <button
+                  onClick={downloadPdfReceipt}
+                  className="mt-3 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-500"
+                >
+                  Download PDF Receipt
+                </button>
+              )}
+            </>
+          )}
+          {htError && <div className="mt-2 text-red-400 font-bold">{htError}</div>}
+          <div className="mt-2 text-slate-400 text-xs">
+            <b>Contract:</b> <span className="font-mono text-green-400">{HONEYTOKEN_CONTRACT_ADDRESS}</span>
+            <span className="ml-2">(Update this address if redeployed)</span>
+          </div>
+        </div>
       </Card>
     </div>
   );
